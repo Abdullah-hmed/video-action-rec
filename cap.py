@@ -22,12 +22,14 @@ the TRACKED_KEY_MAP / key_to_name() mapping below if any of these don't
 match your bound keys.
 
 Output (per session, in ./capture_sessions/session_XXXX/):
-  frames.mp4   -> captured frames at CONFIG["fps"], each with a debug
-                  overlay showing the accumulated mouse delta (arrow)
-                  and the currently-held keys/buttons (text) for that
-                  frame's window -- lets you eyeball sync visually
-  actions.csv  -> frame_idx, timestamp, dt, mouse_dx, mouse_dy, scroll,
-                  w, a, s, d, shift, ctrl, space, enter, tab, lmb, rmb
+  frames.mp4       -> clean captured frames at CONFIG["fps"], no overlay --
+                      this is the copy to use for actual dataset generation
+  frames_debug.mp4 -> same frames with the debug overlay (mouse arrow +
+                      key/button state) burned in, only written when
+                      CONFIG["draw_debug_overlay"] is True -- use this one
+                      for sync-checking, not training
+  actions.csv      -> frame_idx, timestamp, dt, mouse_dx, mouse_dy, scroll,
+                      w, a, s, d, shift, ctrl, space, enter, tab, lmb, rmb
 
 Suggested test order:
   1. Run standalone, no game -- move the mouse, hold/release keys, and
@@ -36,6 +38,8 @@ Suggested test order:
   2. Run with GTA:SA focused and mouselook active, repeat the same check.
 
 Dependencies: pip install mss opencv-python numpy pynput
+Also requires ffmpeg on PATH (used for H.264 video encoding -- much
+smaller files than OpenCV's default mp4v codec at the same quality).
 Windows only (uses the Win32 Raw Input API via ctypes).
 """
 
@@ -46,6 +50,9 @@ import time
 import os
 import csv
 
+import subprocess
+import shutil
+
 import cv2
 import numpy as np
 import mss
@@ -53,15 +60,19 @@ from pynput import keyboard, mouse
 
 # ----------------------------------------------------------------------
 # CONFIG -- kept variable on purpose (fps/resolution/encoder may change
-# later); 5 fps / native resolution / no resize is the base case for
-# this sync test.
+# later). fps/resize_to reflect your own testing (10fps felt smooth vs
+# 5fps; native res used for the sync test, swap resize_to for 384x384 /
+# 256x256 when recording real dataset footage).
 # ----------------------------------------------------------------------
 CONFIG = {
-    "fps": 8,
+    "fps": 10,
     "output_root": "capture_sessions",
     "monitor_index": 1,       # mss monitor index (1 = primary display)
     "resize_to": (384, 384),        # e.g. (256, 256) later; None = native res for now
     "draw_debug_overlay": True,
+    "crf": 22,                # H.264 quality: lower = higher quality/larger file; 18-23 is a sane range
+    "preset": "veryfast",     # libx264 speed/compression tradeoff; irrelevant at this fps, "veryfast" is plenty
+    "gop_seconds": 1.5,       # keyframe interval -- short GOP keeps random-access decode cheap during training
 }
 
 # ----------------------------------------------------------------------
@@ -470,6 +481,52 @@ def draw_debug_overlay(frame, dx, dy, action_fractions, scroll):
     return frame
 
 
+# ----------------------------------------------------------------------
+# H.264 VIDEO WRITER (via ffmpeg subprocess -- see chat for tradeoffs
+# vs. cv2.VideoWriter's default mp4v codec: needs ffmpeg on PATH, but
+# ~2x+ smaller files at the same visual quality)
+# ----------------------------------------------------------------------
+class FFmpegVideoWriter:
+    def __init__(self, path, width, height, fps, crf=22, preset="veryfast", gop_seconds=1.5):
+        if shutil.which("ffmpeg") is None:
+            raise RuntimeError(
+                "ffmpeg not found on PATH. Install it (e.g. 'winget install ffmpeg' on "
+                "Windows, or grab a build from ffmpeg.org) and confirm 'ffmpeg -version' "
+                "works from a terminal before retrying."
+            )
+        gop = max(1, int(round(fps * gop_seconds)))
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s", f"{width}x{height}", "-r", str(fps),
+            "-i", "-",
+            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+            "-g", str(gop), "-pix_fmt", "yuv420p",
+            path,
+        ]
+        self._proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+    def write(self, frame):
+        # frame must already be contiguous BGR24 at the configured (width, height)
+        try:
+            self._proc.stdin.write(frame.tobytes())
+        except BrokenPipeError:
+            raise RuntimeError(
+                "ffmpeg process died mid-recording -- check disk space, and that the "
+                "frame size passed to FFmpegVideoWriter matches every frame written."
+            )
+
+    def release(self):
+        if self._proc.stdin:
+            try:
+                self._proc.stdin.close()
+            except BrokenPipeError:
+                pass
+        self._proc.wait(timeout=15)
+
+
 def next_session_dir(root):
     os.makedirs(root, exist_ok=True)
     existing = [d for d in os.listdir(root) if d.startswith("session_")]
@@ -524,6 +581,7 @@ def run():
     frame_interval = 1.0 / CONFIG["fps"]
 
     video_writer = None
+    debug_writer = None
     csv_file = None
     csv_writer = None
     frame_idx = 0
@@ -541,11 +599,17 @@ def run():
                 if CONFIG["resize_to"]:
                     width, height = CONFIG["resize_to"]
 
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                video_writer = cv2.VideoWriter(
+                video_writer = FFmpegVideoWriter(
                     os.path.join(session_dir, "frames.mp4"),
-                    fourcc, CONFIG["fps"], (width, height)
+                    width, height, CONFIG["fps"],
+                    crf=CONFIG["crf"], preset=CONFIG["preset"], gop_seconds=CONFIG["gop_seconds"],
                 )
+                if CONFIG["draw_debug_overlay"]:
+                    debug_writer = FFmpegVideoWriter(
+                        os.path.join(session_dir, "frames_debug.mp4"),
+                        width, height, CONFIG["fps"],
+                        crf=CONFIG["crf"], preset=CONFIG["preset"], gop_seconds=CONFIG["gop_seconds"],
+                    )
                 csv_file = open(os.path.join(session_dir, "actions.csv"), "w", newline="")
                 csv_writer = csv.writer(csv_file)
                 csv_writer.writerow(
@@ -570,9 +634,12 @@ def run():
                 controller.stop_requested = False
                 if video_writer is not None:
                     video_writer.release()
+                    if debug_writer is not None:
+                        debug_writer.release()
                     csv_file.close()
                     print(f"[session] finalized: {session_dir}")
                 video_writer = None
+                debug_writer = None
                 csv_file = None
                 csv_writer = None
 
@@ -589,10 +656,11 @@ def run():
                     if CONFIG["resize_to"]:
                         frame = cv2.resize(frame, CONFIG["resize_to"])
 
-                    if CONFIG["draw_debug_overlay"]:
-                        frame = draw_debug_overlay(frame, dx, dy, fractions, scroll)
+                    video_writer.write(frame)  # clean frame, no overlay -- this is your dataset copy
 
-                    video_writer.write(frame)
+                    if debug_writer is not None:
+                        debug_frame = draw_debug_overlay(frame.copy(), dx, dy, fractions, scroll)
+                        debug_writer.write(debug_frame)
                     csv_writer.writerow(
                         [frame_idx, now, elapsed, dx, dy, scroll]
                         + [round(fractions[name], 4) for name in TRACKED_ACTION_NAMES]
@@ -610,6 +678,8 @@ def run():
     finally:
         if video_writer is not None:
             video_writer.release()
+        if debug_writer is not None:
+            debug_writer.release()
         if csv_file is not None:
             csv_file.close()
         kb_listener.stop()
