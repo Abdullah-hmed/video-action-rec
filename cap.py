@@ -65,7 +65,7 @@ from pynput import keyboard, mouse
 # 256x256 when recording real dataset footage).
 # ----------------------------------------------------------------------
 CONFIG = {
-    "fps": 10,
+    "fps": 8,
     "output_root": "capture_sessions",
     "monitor_index": 1,       # mss monitor index (1 = primary display)
     "resize_to": (384, 384),        # e.g. (256, 256) later; None = native res for now
