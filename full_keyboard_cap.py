@@ -65,7 +65,7 @@ from pynput import keyboard, mouse
 # 256x256 when recording real dataset footage).
 # ----------------------------------------------------------------------
 CONFIG = {
-    "fps": 8,
+    "fps": 15,
     "output_root": "capture_sessions",
     "monitor_index": 1,       # mss monitor index (1 = primary display)
     "resize_to": (384, 384),        # e.g. (256, 256) later; None = native res for now
@@ -372,7 +372,7 @@ class ScrollTracker:
 # stop a session doesn't also leak into actions.csv as a "held" key.
 CONTROL_KEYS = {keyboard.Key.insert, keyboard.Key.esc}
 
-# Left/right/AltGr variants of a modifier collapse onto one shared
+# Shift, Cmd and Alt_Gr variants of a modifier collapse onto one shared
 # column (e.g. shift_l/shift_r -> "shift") since almost nothing cares
 # which physical key was pressed. Every other special (non-character)
 # key that this pynput build exposes on keyboard.Key -- arrows,
@@ -381,8 +381,7 @@ CONTROL_KEYS = {keyboard.Key.insert, keyboard.Key.esc}
 # its pynput attribute name, so nothing has to be hand-listed here.
 _MODIFIER_MERGE = {
     "shift_l": "shift", "shift_r": "shift",
-    "ctrl_l": "ctrl", "ctrl_r": "ctrl",
-    "alt_l": "alt", "alt_r": "alt", "alt_gr": "alt",
+    "alt_gr": "alt_r",
     "cmd_l": "cmd", "cmd_r": "cmd",
 }
 SPECIAL_KEY_MAP = {

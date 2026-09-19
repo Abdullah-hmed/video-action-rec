@@ -57,9 +57,11 @@ INACTIVE_COLOR = (225, 225, 225)  # RGB, not-held color
 
 # ----------------------------------------------------------------------
 # Keyboard layout: (name, row, col, colspan) tuples on a shared grid.
-# A name may appear more than once (e.g. "shift" on both sides of the
-# home row) since left/right variants of modifiers collapse onto one
-# tracked column in cap.py -- both tiles just mirror the same value.
+# Each physical key has its own tracked column now (shift_l/shift_r,
+# ctrl_l/ctrl_r, alt_l/alt_r), so both halves of a modifier map to
+# their own tile. Only "cmd" is still a single merged column, so both
+# Win-key tiles mirror the same value. alt_gr also lands in alt_r in
+# cap.py, so the right-Alt tile lights up for AltGr too.
 # Gaps between clusters (function-row groups, main block / arrows /
 # numpad) are plain skipped columns, which is enough to read as
 # keyboard-shaped without needing pixel-perfect key widths.
@@ -90,9 +92,9 @@ KEYBOARD_LAYOUT = [
     ("comma", 4, 9, 1), ("period", 4, 10, 1), ("slash", 4, 11, 1),
     ("shift", 4, 12, 3),
     # bottom row
-    ("ctrl", 5, 0, 1), ("cmd", 5, 1, 1), ("alt", 5, 2, 1),
-    ("space", 5, 3, 6), ("alt", 5, 9, 1), ("cmd", 5, 10, 1),
-    ("menu", 5, 11, 1), ("ctrl", 5, 12, 3),
+    ("ctrl_l", 5, 0, 1), ("cmd", 5, 1, 1), ("alt_l", 5, 2, 1),
+    ("space", 5, 3, 6), ("alt_r", 5, 9, 1), ("cmd", 5, 10, 1),
+    ("menu", 5, 11, 1), ("ctrl_r", 5, 12, 3),
     # arrow cluster (gap at col 15 separates it from the main block)
     ("up", 4, 16, 1),
     ("left", 5, 15, 1), ("down", 5, 16, 1), ("right", 5, 17, 1),
